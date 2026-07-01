@@ -2,14 +2,13 @@
 X (Twitter) 자동 업로드
 - Drive 폴더에서 PNG + TXT 세트 랜덤 선택
 - 이미지로 메인 트윗 게시
-- 업로드 성공 시 Drive에서 파일 삭제
+- 업로드 성공 시 Drive 이력 파일에 기록 (삭제 없음)
 """
 
 import sys
 import random
 import tempfile
 import tweepy
-import requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -44,6 +43,42 @@ def get_drive_service():
         token_uri="https://oauth2.googleapis.com/token"
     )
     return build("drive", "v3", credentials=creds)
+
+
+# ── 업로드 이력 (Drive 파일) ──────────────────────────────
+HISTORY_FILENAME = "_x_uploaded_{lang}.txt"
+
+def load_history(folder_id, lang):
+    service = get_drive_service()
+    fname = HISTORY_FILENAME.format(lang=lang)
+    results = service.files().list(
+        q=f"'{folder_id}' in parents and name='{fname}' and trashed=false",
+        fields="files(id)"
+    ).execute()
+    files = results.get("files", [])
+    if not files:
+        return set(), None
+    file_id = files[0]["id"]
+    content = service.files().get_media(fileId=file_id).execute()
+    uploaded = {line.strip() for line in content.decode("utf-8").splitlines() if line.strip()}
+    return uploaded, file_id
+
+def save_history(folder_id, lang, file_id, new_bases):
+    from googleapiclient.http import MediaInMemoryUpload
+    service = get_drive_service()
+    fname = HISTORY_FILENAME.format(lang=lang)
+    uploaded, _ = load_history(folder_id, lang)
+    uploaded.update(str(b) for b in new_bases)
+    content = "\n".join(sorted(uploaded)).encode("utf-8")
+    media = MediaInMemoryUpload(content, mimetype="text/plain")
+    if file_id:
+        service.files().update(fileId=file_id, media_body=media).execute()
+    else:
+        service.files().create(
+            body={"name": fname, "parents": [folder_id]},
+            media_body=media
+        ).execute()
+    print(f"  이력 저장 완료 ({len(uploaded)}개 누적)")
 
 
 # ── Drive 폴더 스캔 ───────────────────────────────────────
@@ -145,7 +180,6 @@ def scan_drive_folder(folder_id):
 
 # ── Drive 파일 다운로드 ───────────────────────────────────
 def download_from_drive(file_id, filename, tmp_dir):
-    import os
     service = get_drive_service()
     request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     fpath = os.path.join(tmp_dir, filename)
@@ -155,16 +189,6 @@ def download_from_drive(file_id, filename, tmp_dir):
         while not done:
             _, done = downloader.next_chunk()
     return fpath
-
-
-# ── Drive 파일 삭제 ───────────────────────────────────────
-def delete_from_drive(file_id, filename):
-    service = get_drive_service()
-    try:
-        service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
-    except Exception:
-        service.files().update(fileId=file_id, body={"trashed": True}).execute()
-    print(f"  Drive 삭제: {filename}")
 
 
 # ── Tweepy 클라이언트 ─────────────────────────────────────
@@ -235,13 +259,6 @@ def post_group(lang, base, file_items):
         main_id = main_tweet.data["id"]
         print(f"  트윗 ID: {main_id}")
 
-    # 업로드 성공 → Drive 파일 삭제
-    for item in file_items:
-        try:
-            delete_from_drive(item["id"], item["name"])
-        except Exception as e:
-            print(f"  Drive 삭제 실패 ({item['name']}): {e}")
-
     print(f"  [{lang}] {base} 업로드 완료!")
     return True
 
@@ -250,19 +267,22 @@ def post_group(lang, base, file_items):
 def post_one(lang):
     folder_id = ACCOUNTS[lang]["drive_folder_id"]
     groups = scan_drive_folder(folder_id)
+    uploaded, history_file_id = load_history(folder_id, lang)
 
     available = [
         b for b, items in groups.items()
-        if any(f["type"] == "png" for f in items)
+        if any(f["type"] == "png" for f in items) and str(b) not in uploaded
     ]
 
     if not available:
-        print(f"[{lang}] 업로드 가능한 파일 없음")
+        print(f"[{lang}] 업로드 가능한 파일 없음 (전체 {len(groups)}개 중 {len(uploaded)}개 이미 업로드)")
         return
 
     print(f"[{lang}] 업로드 가능: {len(available)}개")
     base = random.choice(available)
-    post_group(lang, base, groups[base])
+    success = post_group(lang, base, groups[base])
+    if success:
+        save_history(folder_id, lang, history_file_id, [base])
 
 
 if __name__ == "__main__":
