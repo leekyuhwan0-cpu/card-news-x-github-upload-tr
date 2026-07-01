@@ -234,7 +234,10 @@ def post_group(lang, base, file_items):
 
     # 업로드 성공 → Drive 파일 삭제
     for item in file_items:
-        delete_from_drive(item["id"], item["name"])
+        try:
+            delete_from_drive(item["id"], item["name"])
+        except Exception as e:
+            print(f"  Drive 삭제 실패 ({item['name']}): {e}")
 
     print(f"  [{lang}] {base} 업로드 완료!")
     return True
