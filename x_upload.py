@@ -160,7 +160,10 @@ def download_from_drive(file_id, filename, tmp_dir):
 # ── Drive 파일 삭제 ───────────────────────────────────────
 def delete_from_drive(file_id, filename):
     service = get_drive_service()
-    service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+    try:
+        service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+    except Exception:
+        service.files().update(fileId=file_id, body={"trashed": True}).execute()
     print(f"  Drive 삭제: {filename}")
 
 
