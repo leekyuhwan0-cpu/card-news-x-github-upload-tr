@@ -1,0 +1,4 @@
+x_config.py
+__pycache__/
+*.pyc
+download_from_xlsx.py
