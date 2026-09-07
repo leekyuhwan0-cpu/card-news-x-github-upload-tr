@@ -5,6 +5,7 @@ X (Twitter) 자동 업로드
 - 업로드 성공 시 Drive 이력 파일에 기록 (삭제 없음)
 """
 
+import os
 import sys
 import random
 import tempfile
@@ -14,23 +15,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import io
 
-import os
-import fal_client
-from x_config import ACCOUNTS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, FAL_KEY
-
-os.environ["FAL_KEY"] = FAL_KEY
-
-
-# ── 텍스트 요약 (gpt-4o-mini) ────────────────────────────
-def summarize_text(text, max_chars=200):
-    result = fal_client.run(
-        "fal-ai/any-llm",
-        arguments={
-            "model": "openai/gpt-4o-mini",
-            "prompt": f"Summarize the following text in the same language, within {max_chars} characters. Output only the summary, nothing else:\n\n{text}"
-        }
-    )
-    return result.get("output", text[:max_chars])
+from x_config import ACCOUNTS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
 
 
 # ── Google Drive 인증 ─────────────────────────────────────
@@ -222,7 +207,7 @@ def post_group(lang, base, file_items):
         print(f"  [오류] 미디어 없음")
         return False
 
-    print(f"\n[{lang}] {base} 업로드 시작 (영상:{len(video_items)} 이미지:{len(png_items)})")
+    print(f"\n[{lang}] 업로드 시작 (영상:{len(video_items)} 이미지:{len(png_items)})")
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         media_ids = []
@@ -232,24 +217,19 @@ def post_group(lang, base, file_items):
             vid_path = download_from_drive(vid_item["id"], vid_item["name"], tmp_dir)
             media = api.media_upload(vid_path, media_category="tweet_video")
             media_ids.append(media.media_id)
-            print(f"  영상 업로드 완료: {vid_item['name']} (ID: {media.media_id})")
+            print(f"  영상 업로드 완료 (ID: {media.media_id})")
         else:
             for img_item in png_items[:4]:
                 img_path = download_from_drive(img_item["id"], img_item["name"], tmp_dir)
                 media = api.media_upload(img_path)
                 media_ids.append(media.media_id)
-                print(f"  이미지 업로드: {img_item['name']} (ID: {media.media_id})")
+                print(f"  이미지 업로드 완료 (ID: {media.media_id})")
 
-        # 본문 읽기 & 요약
+        # 본문(인스타 최고좋아요 댓글) 읽기 - 그대로 캡션으로 사용
         caption = ""
         if txt_items:
             txt_path = download_from_drive(txt_items[0]["id"], txt_items[0]["name"], tmp_dir)
-            raw_text = open(txt_path, encoding="utf-8").read().strip()
-            if len(raw_text) > 200:
-                print(f"  텍스트 요약 중...")
-                caption = summarize_text(raw_text, max_chars=200)
-            else:
-                caption = raw_text
+            caption = open(txt_path, encoding="utf-8").read().strip()
             if len(caption) > 280:
                 caption = caption[:277] + "..."
             print(f"  캡션 길이: {len(caption)}자")
@@ -259,7 +239,7 @@ def post_group(lang, base, file_items):
         main_id = main_tweet.data["id"]
         print(f"  트윗 ID: {main_id}")
 
-    print(f"  [{lang}] {base} 업로드 완료!")
+    print(f"  [{lang}] 업로드 완료!")
     return True
 
 
@@ -276,15 +256,17 @@ def post_one(lang):
 
     if not available:
         print(f"[{lang}] 업로드 가능한 파일 없음 (전체 {len(groups)}개 중 {len(uploaded)}개 이미 업로드)")
-        return
+        return False
 
     print(f"[{lang}] 업로드 가능: {len(available)}개")
     base = random.choice(available)
     success = post_group(lang, base, groups[base])
     if success:
         save_history(folder_id, lang, history_file_id, [base])
+    return success
 
 
 if __name__ == "__main__":
     lang = sys.argv[1] if len(sys.argv) > 1 else "tr"
-    post_one(lang)
+    ok = post_one(lang)
+    sys.exit(0 if ok else 1)
